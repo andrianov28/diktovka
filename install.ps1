@@ -43,7 +43,7 @@ Say 'Ставлю Python 3.12 и библиотеки (пара минут)…'
 & $Uv venv "$Dir\venv" --python 3.12 --allow-existing -q
 if ($LASTEXITCODE) { throw 'Не получилось создать окружение Python' }
 $Py = "$Dir\venv\Scripts\python.exe"
-$pkgs = @('faster-whisper', 'sounddevice', 'numpy', 'keyboard', 'pyperclip', 'pystray', 'pillow')
+$pkgs = @('faster-whisper', 'sounddevice', 'numpy', 'pyperclip', 'pystray', 'pillow')
 
 $gpu = $null
 try { $gpu = (& nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1) } catch {}

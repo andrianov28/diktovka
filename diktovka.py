@@ -211,6 +211,7 @@ class App:
             self.ov.show("Не вижу микрофон – проверь его в Windows", "#B3261E", 4)
             return
         self.recording = True
+        log("запись началась")
         self.beep(880, 90)
         self.ov.show(f"●  Говорите…   {self.key} – готово", "#C62828")
 
@@ -220,6 +221,7 @@ class App:
             self.stream.stop(); self.stream.close()
             self.beep(660, 90)
             audio = np.concatenate(self.chunks) if self.chunks else np.zeros(0, dtype="float32")
+            log(f"запись остановлена, {len(audio)/16000:.1f} с")
             if len(audio) < 16000 * 0.3:
                 self.ov.show("Пусто – ничего не записалось", "#555555", 2)
                 return
@@ -239,7 +241,7 @@ class App:
             self.busy = False
 
     def paste(self, text):
-        import pyperclip, keyboard
+        import pyperclip
         u = ctypes.windll.user32
         try:
             old = pyperclip.paste()
@@ -250,10 +252,10 @@ class App:
             u.SetForegroundWindow(self.target)
             time.sleep(0.15)
         time.sleep(0.05)
-        keyboard.send("ctrl+v")
+        press([0x11, 0x56])          # Ctrl+V
         if self.cfg.get("auto_send"):
             time.sleep(0.15)
-            keyboard.send("enter")
+            press([0x0D])            # Enter
         time.sleep(0.4)
         if old is not None:
             try:
@@ -271,6 +273,56 @@ class App:
         except Exception:
             log(traceback.format_exc())
             self.ov.show("Модель не загрузилась – смотри diktovka.log", "#B3261E", 8)
+
+
+def press(vks):
+    # нажать и отпустить сочетание клавиш (виртуальные коды Windows)
+    kb = ctypes.windll.user32.keybd_event
+    for vk in vks:
+        kb(vk, 0, 0, 0)
+    for vk in reversed(vks):
+        kb(vk, 0, 2, 0)  # KEYEVENTF_KEYUP
+
+
+MODS = {"alt": 0x1, "ctrl": 0x2, "control": 0x2, "shift": 0x4, "win": 0x8}
+NAMED = {"space": 0x20, "pause": 0x13, "insert": 0x2D, "home": 0x24, "end": 0x23,
+         "pageup": 0x21, "pagedown": 0x22, "scrolllock": 0x91, "capslock": 0x14,
+         "`": 0xC0, "tab": 0x09, "enter": 0x0D}
+
+
+def parse_hotkey(s):
+    mods, vk = 0, None
+    for part in s.lower().replace(" ", "").split("+"):
+        if part in MODS:
+            mods |= MODS[part]
+        elif part in NAMED:
+            vk = NAMED[part]
+        elif len(part) >= 2 and part[0] == "f" and part[1:].isdigit():
+            vk = 0x6F + int(part[1:])          # F1 = 0x70
+        elif len(part) == 1 and part.isalnum():
+            vk = ord(part.upper())
+    if vk is None:
+        raise ValueError(f"Не понял клавишу «{s}» в config.json")
+    return mods, vk
+
+
+def hotkey_loop(app):
+    # Системная горячая клавиша Windows: в отличие от перехвата клавиатуры,
+    # не отключается после сна, блокировки экрана или подвисания.
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    try:
+        mods, vk = parse_hotkey(app.cfg["hotkey"])
+    except Exception as e:
+        log(e); app.ov.show(str(e), "#B3261E", 8); return
+    if not u.RegisterHotKey(None, 1, mods | 0x4000, vk):   # 0x4000 – без автоповтора
+        log("RegisterHotKey не удалось, клавиша занята:", app.cfg["hotkey"])
+        app.ov.show(f"{app.key} занята другой программой – смени клавишу в config.json", "#B3261E", 10)
+        return
+    msg = wintypes.MSG()
+    while u.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+        if msg.message == 0x0312:  # WM_HOTKEY
+            app.toggle()
 
 
 def tray(app):
@@ -329,10 +381,9 @@ def main():
         ctypes.windll.user32.MessageBoxW(None, "Диктовка уже запущена – значок микрофона возле часов.", "Диктовка", 0x40)
         return
 
-    import keyboard
     ov = Overlay()
     app = App(cfg, ov)
-    keyboard.add_hotkey(cfg["hotkey"], app.toggle, suppress=True)
+    threading.Thread(target=hotkey_loop, args=(app,), daemon=True).start()
     threading.Thread(target=app.load, daemon=True).start()
     tray(app)
     log("запущена, клавиша", cfg["hotkey"])
